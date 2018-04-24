@@ -28,6 +28,10 @@ def pick_model(args, dicts):
     elif args.model == "conv_attn":
         filter_size = int(args.filter_size)
         model = models.ConvAttnPool(Y, args.embed_file, filter_size, args.num_filter_maps, args.lmbda, args.gpu, dicts, embed_size=args.embed_size, dropout=args.dropout)
+    elif args.model == "rnn_attn":
+        encoder = models.Encoder(Y, args.embed_file, dicts, embed_size=args.embed_size)
+        decoder = models.Decoder(Y, args.embed_file, dicts)
+        model = models.Seq2Seq(encoder, decoder, Y, args.embed_file, dicts)
     elif args.model == "saved":
         model = torch.load(args.test_model)
     if args.gpu:

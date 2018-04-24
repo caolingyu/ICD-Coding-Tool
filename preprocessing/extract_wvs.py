@@ -11,7 +11,7 @@ import datasets
 
 import numpy as np
 
-def gensim_to_embeddings(wv_file, vocab_file, Y, outfile=None):
+def gensim_to_embeddings(wv_file, vocab_file, outfile=None):
     model = gensim.models.Word2Vec.load(wv_file)
     wv = model.wv
     #free up memory

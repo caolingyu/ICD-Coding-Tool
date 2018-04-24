@@ -126,25 +126,25 @@ def load_code_freqs(train_path):
     """
     num_lines = 0
     freqs = defaultdict(float)
-    with open(train_path) as train_file:
+    with open(train_path, encoding='gb18030') as train_file:
         r = csv.reader(train_file)
         #header
         next(r)
         for row in r:
             num_lines += 1
-            labels = row[3].split(';')
+            labels = row[1].split(' ')
             if len(labels) > 0:
                 for label in labels:
                     if label != '':
                         freqs[label] += 1
 
-    with open(train_path.replace("train", 'test')) as dev_file:
+    with open(train_path.replace("train", 'test'), encoding='gb18030') as dev_file:
         r = csv.reader(dev_file)
         #header
         next(r)
         for row in r:
             num_lines += 1
-            labels = row[3].split(';')
+            labels = row[1].split(' ')
             if len(labels) > 0:
                 for label in labels:
                     if label != '':
@@ -189,6 +189,31 @@ def load_lookups(train_path, vocab_file, desc_embed=False):
     dicts = (ind2w, w2ind, ind2c, c2ind, desc_dict, dv_dict)
     return dicts
 
+# def load_full_codes(train_path, desc_embed):
+#     """
+#         Inputs:
+#             train_path: path to train dataset
+#         Outputs:
+#             code lookup, description lookup
+#     """
+#     #get description lookup
+#     if desc_embed:
+#         desc_dict = load_code_descriptions()
+#     else:
+#         desc_dict = []
+#     #build code lookups from appropriate datasets
+#     codes = set()
+#     for split in ['train', 'test']:
+#         with open(train_path.replace('train', split), 'r', encoding='gb18030') as f:
+#             lr = csv.reader(f)
+#             next(lr)
+#             for row in lr:
+#                 for code in row[1].split():
+#                     codes.add(code)
+#     ind2c = defaultdict(str)
+#     ind2c.update({i:c for i,c in enumerate(codes)})
+#     return ind2c, desc_dict
+
 def load_full_codes(train_path, desc_embed):
     """
         Inputs:
@@ -202,23 +227,18 @@ def load_full_codes(train_path, desc_embed):
     else:
         desc_dict = []
     #build code lookups from appropriate datasets
-    codes = set()
-    for split in ['train', 'test']:
-        with open(train_path.replace('train', split), 'r', encoding='gb18030') as f:
-            lr = csv.reader(f)
-            next(lr)
-            for row in lr:
-                for code in row[1].split():
-                    codes.add(code)
     ind2c = defaultdict(str)
-    ind2c.update({i:c for i,c in enumerate(codes)})
+    with open('./data/code_list.csv', 'r', encoding='gb18030') as f:
+        for i, line in enumerate(f):
+            line = line.rstrip()
+            ind2c[i] = line
     return ind2c, desc_dict
 
 def load_code_descriptions():
     #load description lookup from the appropriate data files
     desc_dict = defaultdict(str)
 
-    with open('../data/ICD_Descriptions.csv', 'r', encoding='gb18030') as labelfile:
+    with open('./data/ICD_Descriptions.csv', 'r', encoding='gb18030') as labelfile:
         f = csv.reader(labelfile)
         next(f)
         for row in f:

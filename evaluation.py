@@ -40,7 +40,7 @@ def all_metrics(yhat, y, k=8, yhat_raw=None):
         for k_i in k:
             rec_at_k = recall_at_k(yhat_raw, y, k_i)
             metrics['rec_at_%d' % k_i] = rec_at_k
-            prec_at_k = precision_at_k(yhat_raw, y, k_i)
+            prec_at_k = precision_at_k(yhat, yhat_raw, y, k_i)
             metrics['prec_at_%d' % k_i] = prec_at_k
             metrics['f1_at_%d' % k_i] = 2*(prec_at_k*rec_at_k)/(prec_at_k+rec_at_k)
 
@@ -127,7 +127,7 @@ def recall_at_k(yhat_raw, y, k):
 
     return np.mean(vals)
 
-def precision_at_k(yhat_raw, y, k):
+def precision_at_k(yhat, yhat_raw, y, k):
     #num true labels in top k predictions / num 1 predictions in top k 
     sortd = np.argsort(yhat_raw)[:,::-1]
     topk = sortd[:,:k]
@@ -137,8 +137,11 @@ def precision_at_k(yhat_raw, y, k):
     for i, tk in enumerate(topk):
         if len(tk) > 0:
             num_true_in_top_k = y[i,tk].sum()
-            denom = len(tk)
-            vals.append(num_true_in_top_k / float(denom))
+            denom = yhat[i,tk].sum()
+            if denom == 0: # in case no true predictions made in top k
+                vals.append(1)
+            else:
+                vals.append(num_true_in_top_k / float(denom))
 
     return np.mean(vals)
 

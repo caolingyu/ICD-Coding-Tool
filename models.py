@@ -21,7 +21,7 @@ from preprocessing import extract_wvs
 
 class BaseModel(nn.Module):
 
-    def __init__(self, Y, embed_file, dicts, lmbda=0, dropout=0.5, gpu=True, embed_size=100):
+    def __init__(self, Y, embed_file, dicts, lmbda=0, dropout=0.5, gpu=False, embed_size=100):
         super(BaseModel, self).__init__()
         self.gpu = gpu
         self.Y = Y
@@ -63,7 +63,7 @@ class BaseModel(nn.Module):
         b_batch = []
         for inst in desc_data:
             if len(inst) > 0:
-                lt = Variable(torch.cuda.LongTensor(inst))
+                lt = Variable(torch.LongTensor(inst))
                 d = self.desc_embedding(lt)
                 d = d.transpose(1,2)
                 d = self.label_conv(d)
@@ -93,6 +93,8 @@ class BaseModel(nn.Module):
 
     def params_to_optimize(self):
         return self.parameters()
+
+# =========================================================================================
 
 class ConvAttnPool(BaseModel):
 
@@ -126,7 +128,7 @@ class ConvAttnPool(BaseModel):
             self.desc_embedding = nn.Embedding(W.size()[0], W.size()[1])
             self.desc_embedding.weight.data = W.clone()
 
-            self.label_conv = nn.Conv1d(self.embed_size, num_filter_maps, kernel_size=kernel_size, padding=kernel_size/2)
+            self.label_conv = nn.Conv1d(self.embed_size, num_filter_maps, kernel_size=kernel_size, padding=int(kernel_size/2))
             xavier_uniform(self.label_conv.weight)
 
             self.label_fc1 = nn.Linear(num_filter_maps, num_filter_maps)
@@ -170,7 +172,10 @@ class ConvAttnPool(BaseModel):
             
         #final sigmoid to get predictions
         yhat = F.sigmoid(r)
-        loss = self.get_loss(yhat, target, diffs)
+        if target is not None:
+            loss = self.get_loss(yhat, target, diffs)
+        else:
+            loss = 0
         return yhat, loss, alpha
     
     def params_to_optimize(self):
@@ -194,6 +199,8 @@ class ConvAttnPool(BaseModel):
         ps.append(self.final)
         ps.append(self.final_bias)
         return ps
+
+# =========================================================================================
 
 class VanillaConv(BaseModel):
 
@@ -255,6 +262,7 @@ class VanillaConv(BaseModel):
         attn_full = attn_full.transpose(1,2)
         return attn_full
 
+# =========================================================================================
 
 class VanillaRNN(BaseModel):
     """
@@ -319,3 +327,175 @@ class VanillaRNN(BaseModel):
     def refresh(self, batch_size):
         self.batch_size = batch_size
         self.hidden = self.init_hidden()
+
+
+# =========================================================================================
+
+class Encoder(BaseModel):
+    def __init__(self, Y, embed_file, dicts, embed_size=100, hidden_size=200, n_layers=1, dropout=0.5):
+        super(Encoder, self).__init__(Y, embed_file, dicts, embed_size=embed_size)
+        # self.input_size = input_size
+        self.hidden_size = hidden_size
+        self.embed_size = embed_size
+        self.n_layers = n_layers
+        self.dropout = dropout
+        # self.embedding = nn.Embedding(input_size,embed_size)
+        self.gru = nn.GRU(embed_size, hidden_size, n_layers, dropout=self.dropout, bidirectional=True)
+
+    def forward(self, input_seqs, input_length=None, hidden=None):
+        '''
+        :param input_seqs: 
+            Variable of shape (num_step(T),batch_size(B)), sorted decreasingly by lengths(for packing)
+        :param input:
+            list of sequence length
+        :param hidden:
+            initial state of GRU
+        :returns:
+            GRU outputs in shape (T,B,hidden_size(H))
+            last hidden stat of RNN(i.e. last output for GRU)
+        '''
+        embedded = self.embed(input_seqs)
+        # packed = torch.nn.utils.rnn.pack_padded_sequence(embedded, input_lengths)
+        outputs, hidden = self.gru(embedded, hidden)
+        # outputs, output_lengths = torch.nn.utils.rnn.pad_packed_sequence(outputs)  # unpack (back to padded)
+        outputs = outputs[:, :, :self.hidden_size] + outputs[:, :, self.hidden_size:]  # Sum bidirectional outputs
+        return outputs, hidden
+
+
+class Attn(nn.Module):
+    def __init__(self, method=None, hidden_size=200):
+        super(Attn, self).__init__()
+        self.method = method
+        self.hidden_size = hidden_size
+        self.attn = nn.Linear(self.hidden_size * 2, hidden_size)
+        self.v = nn.Parameter(torch.rand(hidden_size))
+        stdv = 1. / math.sqrt(self.v.size(0))
+        self.v.data.normal_(mean=0, std=stdv)
+
+    def forward(self, hidden, encoder_outputs):
+        '''
+        :param hidden: 
+            previous hidden state of the decoder, in shape (layers*directions,B,H)
+        :param encoder_outputs:
+            encoder outputs from Encoder, in shape (T,B,H)
+        :return
+            attention energies in shape (B,T)
+        '''
+        max_len = encoder_outputs.size(0)
+        this_batch_size = encoder_outputs.size(1)
+        H = hidden.repeat(max_len,1,1).transpose(0,1)
+        encoder_outputs = encoder_outputs.transpose(0,1) # [B*T*H]
+        attn_energies = self.score(H,encoder_outputs) # compute attention score
+        return F.softmax(attn_energies).unsqueeze(1) # normalize with softmax
+
+    def score(self, hidden, encoder_outputs):
+        energy = F.tanh(self.attn(torch.cat([hidden, encoder_outputs], 2))) # [B*T*2H]->[B*T*H]
+        energy = energy.transpose(2,1) # [B*H*T]
+        v = self.v.repeat(encoder_outputs.data.shape[0],1).unsqueeze(1) #[B*1*H]
+        energy = torch.bmm(v,energy) # [B*1*T]
+        return energy.squeeze(1) #[B*T]
+
+
+class Decoder(BaseModel):
+    def __init__(self, Y, embed_file, dicts, hidden_size=200, embed_size=100, n_layers=1, dropout_p=0.1):
+        super(Decoder, self).__init__(Y, embed_file, dicts, embed_size=embed_size)
+        # Define parameters
+        self.hidden_size = hidden_size
+        self.embed_size = embed_size
+        self.output_size = Y
+        self.n_layers = n_layers
+        self.dropout_p = dropout_p
+        # Define layers
+        # self.embedding = nn.Embedding(output_size, embed_size)
+        self.dropout = nn.Dropout(dropout_p)
+        self.attn = Attn('concat', hidden_size)
+        self.gru = nn.GRU(hidden_size + embed_size, hidden_size, n_layers, dropout=dropout_p)
+        #self.attn_combine = nn.Linear(hidden_size + embed_size, hidden_size)
+        self.out = nn.Linear(hidden_size * 2, Y)
+
+    def forward(self, word_input, target, last_hidden, encoder_outputs):
+        '''
+        :param word_input:
+            word input for current time step, in shape (B)
+        :param last_hidden:
+            last hidden stat of the decoder, in shape (layers*direction*B*H)
+        :param encoder_outputs:
+            encoder outputs in shape (T*B*H)
+        :return
+            decoder output
+        Note: we run this one step at a time i.e. you should use a outer loop 
+            to process the whole sequence
+        Tip(update):
+        EncoderRNN may be bidirectional or have multiple layers, so the shape of hidden states can be 
+        different from that of DecoderRNN
+        You may have to manually guarantee that they have the same dimension outside this function,
+        e.g, select the encoder hidden state of the foward/backward pass.
+        '''
+        # Get the embedding of the current input word (last output word)
+        word_embedded = self.embed(word_input)
+        # word_embedded = self.embed(word_input).view(1, word_input.size(0), -1) # (1,B,V)
+        word_embedded = self.dropout(word_embedded)
+        # Calculate attention weights and apply to encoder outputs
+        attn_weights = self.attn(last_hidden[-1], encoder_outputs)
+        context = attn_weights.bmm(encoder_outputs.transpose(0, 1))  # (B,1,V)
+        context = context.transpose(0, 1)  # (1,B,V)
+        # Combine embedded input word and attended context, run through RNN
+        rnn_input = torch.cat((word_embedded, context), 2)
+        #rnn_input = self.attn_combine(rnn_input) # use it in case your size of rnn_input is different
+        output, hidden = self.gru(rnn_input, last_hidden)
+        output = output.squeeze(0)  # (1,B,V)->(B,V)
+        # context = context.squeeze(0)
+        # update: "context" input before final layer can be problematic.
+        # output = F.log_softmax(self.out(torch.cat((output, context), 1)))
+        yhat = F.sigmoid(self.out(output))
+        loss = self.get_loss(yhat, target)
+        # Return final output, hidden state
+        return yhat, loss, attn_weights
+
+
+class Seq2Seq(BaseModel):
+    def __init__(self, encoder, decoder, Y, embed_file, dicts):
+        super(Seq2Seq, self).__init__(Y, embed_file, dicts)
+        self.encoder = encoder
+        self.decoder = decoder
+
+    def forward(self, src, trg, desc_data=None):
+        # batch_size = src.size(1)
+        # max_len = trg.size(0)
+        # vocab_size = self.decoder.output_size
+        # outputs = Variable(torch.zeros(max_len, batch_size, vocab_size)).cuda()
+
+        encoder_output, hidden = self.encoder(src)
+        hidden = hidden[:self.decoder.n_layers]
+        output = Variable(trg.data[0, :])  # sos
+        # for t in range(1, max_len):
+        yhat, loss, attn_weights = self.decoder(
+                output, trg, hidden, encoder_output)
+        # outputs[t] = output
+        # is_teacher = random.random() < teacher_forcing_ratio
+        # top1 = output.data.max(1)[1]
+        # output = Variable(trg.data[t] if is_teacher else top1).cuda()
+
+        return yhat, loss, attn_weights
+    
+    def forward(self, src, trg, desc_data=None):
+        batch_size = src.size(1)
+        max_len = trg.size(0)
+        vocab_size = self.decoder.output_size
+        outputs = Variable(torch.zeros(max_len, batch_size, vocab_size))
+
+        encoder_output, hidden = self.encoder(src)
+        hidden = hidden[:self.decoder.n_layers]
+        output = Variable(trg.data[0, :])  # sos
+        for t in range(1, max_len):
+            output, hidden, attn_weights = self.decoder(
+                    output, trg, hidden, encoder_output)
+            outputs[t] = output
+            is_teacher = random.random() < teacher_forcing_ratio
+            top1 = output.data.max(1)[1]
+            output = Variable(trg.data[t] if is_teacher else top1).cuda()
+        return outputs
+
+    def params_to_optimize(self):
+        return self.parameters()
+

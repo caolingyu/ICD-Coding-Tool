@@ -285,7 +285,7 @@ def test(model, Y, epoch, batch_size, data_path, fold, gpu, code_inds, dicts, sa
     #write the predictions
     preds_file = persistence.write_preds(yhat, model_dir, hids, fold, ind2c, yhat_raw)
     #get metrics
-    k = 5 if num_labels == 50 else 8
+    k = 5
     metrics = evaluation.all_metrics(yhat, y, k=k, yhat_raw=yhat_raw)
     evaluation.print_metrics(metrics)
     metrics['loss_%s' % fold] = np.mean(losses)
@@ -297,7 +297,7 @@ if __name__ == "__main__":
                         help="path to a file containing sorted train data. dev/test splits assumed to have same name format with 'train' replaced by 'dev' and 'test'")
     parser.add_argument("vocab", type=str, help="path to a file holding vocab word list for discretizing words")
     parser.add_argument("Y", type=str, help="size of label space")
-    parser.add_argument("model", type=str, choices=["cnn_vanilla", "rnn", "conv_attn", "multi_conv_attn", "saved"], help="model")
+    parser.add_argument("model", type=str, choices=["cnn_vanilla", "rnn", "conv_attn", "multi_conv_attn", "rnn_attn", "saved"], help="model")
     parser.add_argument("n_epochs", type=int, help="number of epochs to train")
     parser.add_argument("--embed-file", type=str, required=False, dest="embed_file",
                         help="path to a file holding pre-trained embeddings")
